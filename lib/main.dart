@@ -2,6 +2,9 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial_ble/flutter_bluetooth_serial_ble.dart';
+import 'package:hc05/services/bluetooth_interface.dart';
+import 'package:hc05/services/mock_connected_device_service.dart';
+import 'services/bluetooth_service.dart';
 
 void main() {
   runApp(const MyApp());
@@ -17,6 +20,8 @@ class MyApp extends StatelessWidget {
   }
 }
 
+enum DeviceMode { mock, real }
+
 class BluetoothPage extends StatefulWidget {
   const BluetoothPage({super.key});
   @override
@@ -24,36 +29,33 @@ class BluetoothPage extends StatefulWidget {
 }
 
 class _BluetoothPageState extends State<BluetoothPage> {
-  BluetoothConnection? connection;
-  String deviceAddress = "";
+  DeviceMode _selectedMode = DeviceMode.mock;
+  late BluetoothInterface _bluetoothService;
   String receivedData = "";
   bool isConnected = false;
 
-  void connectToDevice(BluetoothDevice device) async {
-    try {
-      BluetoothConnection.toAddress(device.address).then((_connection) {
-        connection = _connection;
-        setState(() => isConnected = true);
+  void initService() {
+    _bluetoothService = _selectedMode == DeviceMode.real
+        ? RealBluetoothService()
+        : MockConnectedDeviceService();
+  }
 
-        connection!.input!.listen((data) {
-          setState(() {
-            receivedData += String.fromCharCodes(data);
-          });
-        });
+  void connectToDevice(BluetoothDevice device) async {
+    await _bluetoothService.connectToDevice(device, (String data) {
+      setState(() {
+        receivedData += data;
       });
-    } catch (e) {
-      print('Error: $e');
-    }
+    });
+    setState(() => isConnected = _bluetoothService.isConnected);
   }
 
   void listDevices() async {
-    final bondedDevices =
-        await FlutterBluetoothSerial.instance.getBondedDevices();
+    final devices = await _bluetoothService.getBondedDevices();
     showDialog(
       context: context,
       builder: (_) => SimpleDialog(
-        title: const Text("เลือกอุปกรณ์ HC-05"),
-        children: bondedDevices.map((device) {
+        title: const Text("เลือกอุปกรณ์"),
+        children: devices.map((device) {
           return SimpleDialogOption(
             child: Text(device.name ?? device.address),
             onPressed: () {
@@ -67,69 +69,70 @@ class _BluetoothPageState extends State<BluetoothPage> {
   }
 
   @override
-  void dispose() {
-    connection?.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    initService();
   }
 
-  void sendCommand(String command) {
-    if (connection != null && connection!.isConnected) {
-      connection!.output.add(Uint8List.fromList(command.codeUnits));
-      connection!.output.allSent.then((_) {
-        print('✅ Sent: $command');
-      });
-    }
+  void send(String command) {
+    _bluetoothService.sendCommand(command);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("ชั่งน้ำหนักผ่าน HC-05")),
+      appBar: AppBar(
+        title: const Text("Bluetooth Weighing"),
+        actions: [
+          DropdownButton<DeviceMode>(
+            value: _selectedMode,
+            onChanged: (mode) {
+              setState(() {
+                _selectedMode = mode!;
+                initService();
+                receivedData = "";
+                isConnected = false;
+              });
+            },
+            items: const [
+              DropdownMenuItem(
+                  value: DeviceMode.mock, child: Text("Mock Device")),
+              DropdownMenuItem(
+                  value: DeviceMode.real, child: Text("Real Device")),
+            ],
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
             ElevatedButton(
-              onPressed: listDevices,
-              child: const Text("เชื่อมต่อ HC-05"),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              isConnected ? "เชื่อมต่อแล้ว" : "ยังไม่เชื่อมต่อ",
-              style: TextStyle(color: isConnected ? Colors.green : Colors.red),
-            ),
-            const SizedBox(height: 20),
-            const Text("ข้อมูลจากเครื่องชั่ง:", style: TextStyle(fontSize: 18)),
+                onPressed: listDevices, child: const Text("เชื่อมต่ออุปกรณ์")),
             const SizedBox(height: 10),
-            Expanded(
-              child: SingleChildScrollView(
-                child: Text(
-                  receivedData,
-                  style: const TextStyle(fontSize: 16),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
             Wrap(
               spacing: 10,
               children: [
                 ElevatedButton(
-                  onPressed: isConnected ? () => sendCommand("T\r\n") : null,
-                  child: const Text("Tare (T)"),
-                ),
+                    onPressed: isConnected ? () => send("T") : null,
+                    child: const Text("Tare")),
                 ElevatedButton(
-                  onPressed: isConnected ? () => sendCommand("Z\r\n") : null,
-                  child: const Text("Zero (Z)"),
-                ),
+                    onPressed: isConnected ? () => send("Z") : null,
+                    child: const Text("Zero")),
                 ElevatedButton(
-                  onPressed: isConnected ? () => sendCommand("P\r\n") : null,
-                  child: const Text("Print (P)"),
-                ),
+                    onPressed: isConnected ? () => send("P") : null,
+                    child: const Text("Print")),
                 ElevatedButton(
-                  onPressed: isConnected ? () => sendCommand("R\r\n") : null,
-                  child: const Text("Read (R)"),
-                ),
+                    onPressed: isConnected ? () => send("R") : null,
+                    child: const Text("Read")),
+                ElevatedButton(
+                    onPressed: isConnected ? () => send("TOTAL") : null,
+                    child: const Text("TOTAL")),
               ],
+            ),
+            const SizedBox(height: 20),
+            Expanded(
+              child: SingleChildScrollView(child: Text(receivedData)),
             ),
           ],
         ),
